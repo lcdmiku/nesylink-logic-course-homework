@@ -1,8 +1,10 @@
 import numpy as np
 
 from nesylink.core.rendering import sprites as sp
+from nesylink.core.rendering.sprites import CHEST_OPEN_INNER
 
 TILE = 16
+TILE_SIZE = 16
 
 EMPTY = 0
 WALL = 1
@@ -16,6 +18,11 @@ NPC = 8
 GAP = 9
 BRIDGE = 10
 SWITCH = 11
+CHEST_OPENED = 12
+
+#grid : [8 , 10]
+ROOM_W = 10
+ROOM_H = 8
 
 
 def blank_tile():
@@ -52,6 +59,13 @@ def make_static_templates():
         sp.draw_chest(f, 0, 0, opened=False, loot_kind=loot)
         templates.append((CHEST, f"chest_{loot}", f))
 
+    # chests_opened: 打开了的chest相当于墙,归于WALL类
+    for loot in ["key", "gold", "heal", "item", ""]:
+        f = blank_tile()
+        sp.draw_chest(f, 0, 0, opened=True, loot_kind=loot)
+        templates.append((WALL, f"chest_opened_{loot}", f))
+
+
     # button
     for pressed in [False, True]:
         f = blank_tile()
@@ -86,7 +100,7 @@ def mse(a, b):
     b = b.astype(np.float32)
     return float(np.mean((a - b) ** 2))
 
-
+#识别静态item
 class StaticTileClassifier:
     def __init__(self):
         self.templates = make_static_templates()
@@ -129,7 +143,7 @@ def masked_mse(patch, rgb, mask):
     diff = patch.astype(np.float32)[mask] - rgb.astype(np.float32)[mask]
     return float(np.mean(diff * diff))
 
-
+#识别player
 class PlayerDetector:
     def __init__(self):
         self.templates = []
@@ -185,7 +199,7 @@ class PlayerDetector:
 
 from nesylink.core.rendering.renderer import MONSTER_COLORS
 
-
+#识别monster
 class MonsterDetector:
     def __init__(self):
         self.templates = []
@@ -236,116 +250,7 @@ class MonsterDetector:
             }
             for tile, v in best.items()
         ]
-    
-from dataclasses import dataclass, field
-from collections import deque
-from typing import Optional, Deque, Dict, List, Tuple, Set
 
-Pos = Tuple[int, int]
-
-@dataclass
-class SymbolicObs:
-    grid: np.ndarray                    # shape: (8, 10)
-    player: Optional[Pos] = None
-    facing: str = "up"
-    monsters: List[Pos] = field(default_factory=list)
-    chests: List[Pos] = field(default_factory=list)
-    exits: List[Pos] = field(default_factory=list)
-    traps: List[Pos] = field(default_factory=list)
-    buttons: List[Pos] = field(default_factory=list)
-    switches: List[Pos] = field(default_factory=list)
-
-    
-class PixelPerception:
-    def __init__(self):
-        self.static_clf = StaticTileClassifier()
-        self.player_detector = PlayerDetector()
-        self.monster_detector = MonsterDetector()
-
-    def __call__(self, obs):
-        frame = np.asarray(obs)
-
-        # 防止误传 render()，只取地图区域
-        frame = frame[:128, :160, :3]
-
-        grid = np.zeros((8, 10), dtype=np.int64)
-
-        # 1. 静态 tile 分类
-        for y in range(8):
-            for x in range(10):
-                patch = frame[y*16:(y+1)*16, x*16:(x+1)*16, :]
-                label, name, score = self.static_clf.classify_tile(patch)
-
-                # 这里阈值可以设严格一点。
-                # 如果 score 太大，默认 floor，避免误判。
-                if score < 500:
-                    grid[y, x] = label
-                else:
-                    grid[y, x] = EMPTY
-
-        # 2. 玩家覆盖修正
-        player_info = self.player_detector.detect(frame)
-        player = None
-        facing = "down"
-
-        if player_info is not None:
-            player = player_info["tile"]
-            facing = player_info["facing"]
-            px, py = player
-            grid[py, px] = PLAYER
-
-        # 3. 怪物覆盖修正
-        monsters = []
-        for m in self.monster_detector.detect_all(frame):
-            tx, ty = m["tile"]
-            monsters.append((tx, ty))
-            grid[ty, tx] = MONSTER
-
-        return self.grid_to_symbolic(grid, player, facing, monsters)
-
-    def grid_to_symbolic(self, grid, player, facing, monsters):
-        chests = []
-        traps = []
-        buttons = []
-        switches = []
-        npcs = []
-        gaps = []
-        bridges = []
-        exits = []
-
-        for y in range(8):
-            for x in range(10):
-                v = int(grid[y, x])
-
-                if v == CHEST:
-                    chests.append((x, y))
-                elif v == TRAP:
-                    traps.append((x, y))
-                elif v == BUTTON:
-                    buttons.append((x, y))
-                elif v == SWITCH:
-                    switches.append((x, y))
-                elif v == NPC:
-                    npcs.append((x, y))
-                elif v == GAP:
-                    gaps.append((x, y))
-                elif v == BRIDGE:
-                    bridges.append((x, y))
-                elif v == EXIT:
-                    exits.append((x, y))
-
-        return SymbolicObs(
-            grid=grid,
-            player=player,
-            facing=facing,
-            monsters=monsters,
-            chests=chests,
-            exits=exits,
-            traps=traps,
-            buttons=buttons,
-            switches=switches,
-        )
-    
 
 # from nesylink.core.rendering import sprites as sp
 from nesylink.core.constants import (
@@ -353,19 +258,6 @@ from nesylink.core.constants import (
     COLOR_EXIT_LOCKED,
     COLOR_EXIT_CONDITIONAL,
 )
-
-
-EXIT = 5
-TILE = 16
-ROOM_W = 10
-ROOM_H = 8
-
-
-def mse(a, b):
-    a = a.astype("float32")
-    b = b.astype("float32")
-    return float(((a - b) ** 2).mean())
-
 
 def make_exit_patch(direction: str, exit_type: str, opened: bool = False):
     """
@@ -397,7 +289,7 @@ def make_exit_patch(direction: str, exit_type: str, opened: bool = False):
     sp.draw_exit(patch, tiles, exit_type, color, opened=opened)
     return patch
 
-
+#识别exit
 class ExitDetector:
     def __init__(self):
         self.templates = []
@@ -480,3 +372,133 @@ class ExitDetector:
             exits.append(item)
 
         return exits
+
+from dataclasses import dataclass, field
+from typing import Optional, List, Tuple
+
+Pos = Tuple[int, int]
+pxPos = Tuple[float, float]
+
+@dataclass
+class SymbolicObs:
+    grid: np.ndarray                    # shape: (8, 10)
+    player: Optional[Pos] = None
+    facing: str = "up"
+    monsters: List[Pos] = field(default_factory=list)
+    chests: List[Pos] = field(default_factory=list)
+    exits: List[Pos] = field(default_factory=list)
+    traps: List[Pos] = field(default_factory=list)
+    buttons: List[Pos] = field(default_factory=list)
+    switches: List[Pos] = field(default_factory=list)
+
+    #lcd : 添加player与monster的具体像素坐标
+    player_px : Optional[pxPos] = None
+    monsters_px : List[pxPos] = field(default_factory=list)
+
+    
+class PixelPerception:
+    def __init__(self):
+        self.static_clf = StaticTileClassifier()
+        self.player_detector = PlayerDetector()
+        self.monster_detector = MonsterDetector()
+        self.exit_detector = ExitDetector()
+
+    def __call__(self, obs):
+        frame = np.asarray(obs)
+
+        # 防止误传 render()，只取地图区域
+        frame = frame[:128, :160, :3]
+
+        grid = np.zeros((8, 10), dtype=np.int64)
+
+        # 1. 静态 tile 分类
+        for y in range(8):
+            for x in range(10):
+                patch = frame[y*16:(y+1)*16, x*16:(x+1)*16, :]
+                label, name, score = self.static_clf.classify_tile(patch)
+
+                # 这里阈值可以设严格一点。
+                # 如果 score 太大，默认 floor，避免误判。
+                if score < 500:
+                    grid[y, x] = label
+                else:
+                    grid[y, x] = EMPTY
+
+        exit_infos = self.exit_detector.detect(frame)
+
+        exits = []
+        for e in exit_infos:
+            x, y = e["tile"]
+            exits.append((x, y))
+            grid[y, x] = EXIT
+
+        # 2. 玩家覆盖修正
+        player_info = self.player_detector.detect(frame)
+        player = None
+        player_px = None
+        facing = "down"
+
+        if player_info is not None:
+            player = player_info["tile"]
+            facing = player_info["facing"]
+            player_px = player_info['position_px']
+            px, py = player
+            grid[py, px] = PLAYER
+
+        # 3. 怪物覆盖修正
+        monsters = []
+        monsters_px = []
+        for m in self.monster_detector.detect_all(frame):
+            tx, ty = m["tile"]
+            monsters.append((tx, ty))
+            monsters_px.append(m['position_px'])
+            grid[ty, tx] = MONSTER
+
+        return self.grid_to_symbolic(grid, player, facing, monsters,player_px,monsters_px,exits,)
+
+    def grid_to_symbolic(self, grid, player, facing, monsters,player_px,monsters_px, exits_hint=None):
+        chests = []
+        traps = []
+        buttons = []
+        switches = []
+        npcs = []
+        gaps = []
+        bridges = []
+        exits = list(exits_hint) if exits_hint is not None else []
+
+        for y in range(8):
+            for x in range(10):
+                v = int(grid[y, x])
+
+                if v == CHEST:
+                    chests.append((x, y))
+                elif v == TRAP:
+                    traps.append((x, y))
+                elif v == BUTTON:
+                    buttons.append((x, y))
+                elif v == SWITCH:
+                    switches.append((x, y))
+                elif v == NPC:
+                    npcs.append((x, y))
+                elif v == GAP:
+                    gaps.append((x, y))
+                elif v == BRIDGE:
+                    bridges.append((x, y))
+                elif v == EXIT:
+                    p = (x, y)
+                    if p not in exits:
+                        exits.append((x, y))
+
+        return SymbolicObs(
+            grid=grid,
+            player=player,
+            facing=facing,
+            monsters=monsters,
+            chests=chests,
+            exits=exits,
+            traps=traps,
+            buttons=buttons,
+            switches=switches,
+            player_px=player_px,
+            monsters_px=monsters_px,
+        )
