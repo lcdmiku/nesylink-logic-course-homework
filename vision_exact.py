@@ -1,115 +1,54 @@
 import numpy as np
 
 from nesylink.core.rendering import sprites as sp
-from nesylink.core.rendering.sprites import CHEST_OPEN_INNER
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Dict
+from Dataclass import ExitInfo,SymbolicObs,Pos,pxPos
 
-TILE = 16
-TILE_SIZE = 16
+from Dataclass import (
+    EMPTY,
+    WALL,
+    PLAYER,
+    MONSTER,
+    CHEST,
+    EXIT,
+    TRAP,
+    BUTTON,
+    NPC,
+    GAP,
+    BRIDGE,
+    SWITCH,
+    # gird's metadata
+    TILE_SIZE,
+    TILE,
+    ROOM_W,
+    ROOM_H,
+    UNKNOWN,
+)
 
-EMPTY = 0
-WALL = 1
-PLAYER = 2
-MONSTER = 3
-CHEST = 4
-EXIT = 5
-TRAP = 6
-BUTTON = 7
-NPC = 8
-GAP = 9
-BRIDGE = 10
-SWITCH = 11
-CHEST_OPENED = 12
-
-# grid : [8 , 10]
-ROOM_W = 10
-ROOM_H = 8
-
-# 数据结构类型
-Pos = Tuple[int, int]
-pxPos = Tuple[float, float]  # 像素位置
-
-
-# 识别exit
-@dataclass
-class ExitInfo:
-    tiles: List[Pos]  # 这个出口占据的两个 tile
-    direction: str  # north/south/west/east
-    exit_type: str = "unknown"  # normal/locked_key/conditional/unknown
-    opened: bool = False
-    score: float = 0.0
-
-    # 联通信息
-    dest: int = 0  # 目标房间id
-    start: int = 0  # 所在房间id
-
-    is_reached: bool = False  # 是否到达过（指到达到dest）
-
-    @property
-    def representative(self) -> Pos:
-        return self.tiles[0]
-
-
-@dataclass
-class SymbolicObs:
-    grid: np.ndarray  # shape: (8, 10)
-    player: Optional[Pos] = None
-    facing: str = "up"
-    monsters: List[Pos] = field(default_factory=list)
-    chests: List[Pos] = field(default_factory=list)
-    exits: List[Pos] = field(default_factory=list)
-    traps: List[Pos] = field(default_factory=list)
-    buttons: List[Pos] = field(default_factory=list)
-    switches: List[Pos] = field(default_factory=list)
-
-    # lcd : 添加player与monster的具体像素坐标
-    player_px: Optional[pxPos] = None
-    monsters_px: List[pxPos] = field(default_factory=list)
-
-    # lcd : 添加exits的信息
-    exit_infos: dict[str, Optional[ExitInfo]] = field(default_factory=dict)  # 记录东西南北4个门的类型，状态，是否存在（不存在为None）
-
-    # exit_types: Dict[Pos, str] = field(default_factory=dict)
-    # exit_opened: Dict[Pos, bool] = field(default_factory=dict)
-
-    @property
-    def exit_types(self) -> Dict[Pos, str]:
-        """动态构建 tile -> exit_type 的映射"""
-        result = {}
-        for info in self.exit_infos.values():
-            if info is not None:
-                for tile in info.tiles:
-                    result[tile] = info.exit_type
-        return result
-
-    @property
-    def exit_opened(self) -> Dict[Pos, bool]:
-        """动态构建 tile -> opened 的映射"""
-        result = {}
-        for info in self.exit_infos.values():
-            if info is not None:
-                for tile in info.tiles:
-                    result[tile] = info.opened
-        return result
-
-    @property
-    def exit_infos_list(self) -> List[ExitInfo]:
-        """
-        动态生成exit_infos的列表形态,去掉None
-        """
-        result = []
-        for info in self.exit_infos.values():
-            if info is not None:
-                result.append(info)
-        return result
-
+TILE_SHAPE = (TILE, TILE, 3)
 
 def blank_tile():
     frame = np.zeros((TILE, TILE, 3), dtype=np.uint8)
     sp.draw_floor(frame, 0, 0)
     return frame
 
+def build_mask(left : int,top : int, width : int,height : int) -> np.ndarray:
+    """制作掩码"""
+    mask = np.zeros((TILE, TILE, 3), dtype=bool)
+    mask[left:left+width, top:top+height] = True
+    return mask
+
+def make_static_masks() -> dict[str, np.ndarray[bool]]:
+    masks = dict[str,np.ndarray]()
+
+    # chests: 三种 loot 外观不同，但都归为 CHEST
+    for loot in ["key", "gold", "heal", "item", ""]:
+        f = np.full(TILE_SHAPE,-1,dtype=int)
+        sp.draw_chest(f, 0, 0, opened=False, loot_kind=loot)
+        masks[f"chest_{loot}"] = np.any(f != -1, axis=-1)  # 形状 (H, W)，只要任一通道非 -1 即为 True
+
+    return masks
 
 def make_static_templates():
     templates = []
@@ -131,7 +70,7 @@ def make_static_templates():
     # bridge
     f = blank_tile()
     sp.draw_bridge(f, 0, 0)
-    templates.append((BRIDGE, "bridge", f))
+    templates.append((BRIDGE, "bridge", f ))
 
     # chests: 三种 loot 外观不同，但都归为 CHEST
     for loot in ["key", "gold", "heal", "item", ""]:
@@ -175,6 +114,7 @@ def make_static_templates():
     return templates
 
 
+
 def mse(a, b):
     a = a.astype(np.float32)
     b = b.astype(np.float32)
@@ -185,6 +125,8 @@ def mse(a, b):
 class StaticTileClassifier:
     def __init__(self):
         self.templates = make_static_templates()
+        self.masks = make_static_masks()
+
 
     def classify_tile(self, patch):
         best_label = EMPTY
@@ -192,7 +134,8 @@ class StaticTileClassifier:
         best_score = 1e18
 
         for label, name, tmpl in self.templates:
-            score = mse(patch, tmpl)
+            mask = self.masks.get(name, None)
+            score = masked_mse(patch, tmpl,mask)
             if score < best_score:
                 best_score = score
                 best_label = label
@@ -218,7 +161,10 @@ def sprite_to_template(sprite, palette):
     return rgb, mask
 
 
-def masked_mse(patch, rgb, mask):
+def masked_mse(patch, rgb, mask = None):
+    if mask is None:
+        #如果为None执行普通mse
+        mask = np.ones_like(patch,dtype=bool)
     if mask.sum() == 0:
         return 1e18
     diff = patch.astype(np.float32)[mask] - rgb.astype(np.float32)[mask]
