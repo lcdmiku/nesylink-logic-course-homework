@@ -343,4 +343,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # sys.argv = [
+    #     "eval.py",  # 脚本名（任意）
+    #     "--policy", "agent.py",
+    #     "--num-envs", "1",
+    #     "--tasks", "mathematical_logic/task_1",
+    #     "--seed", "0",
+    #     "--json-out",
+    #     "None"
+    # ]
     main()
