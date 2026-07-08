@@ -1,10 +1,10 @@
 import numpy as np
-
+from dataclasses import dataclass, field
+from collections import deque
+from typing import Optional, Deque, Dict, List, Tuple, Set
 from nesylink.core.rendering import sprites as sp
 from nesylink.core.rendering.sprites import CHEST_OPEN_INNER
-from dataclasses import dataclass, field
-from typing import Optional, List, Tuple,Dict
-
+# from agent import SymbolicObs, ExitInfo, ROOM_W, ROOM_H
 
 TILE = 16
 TILE_SIZE = 16
@@ -27,71 +27,9 @@ CHEST_OPENED = 12
 ROOM_W = 10
 ROOM_H = 8
 
-#数据结构类型
+
 Pos = Tuple[int, int]
-pxPos = Tuple[float, float] #像素位置
-
-#识别exit
-@dataclass
-class ExitInfo:
-    tiles: List[Pos]              # 这个出口占据的两个 tile
-    direction: str                # north/south/west/east
-    exit_type: str = "unknown"    # normal/locked_key/conditional/unknown
-    opened: bool = False
-    score: float = 0.0
-
-    #联通信息
-    dest : int = 0  #目标房间id
-    start : int = 0 #所在房间id
-
-    is_reached : bool = False #是否到达过（指到达到dest）
-
-    @property
-    def representative(self) -> Pos:
-        return self.tiles[0]
-
-
-@dataclass
-class SymbolicObs:
-    grid: np.ndarray                    # shape: (8, 10)
-    player: Optional[Pos] = None
-    facing: str = "up"
-    monsters: List[Pos] = field(default_factory=list)
-    chests: List[Pos] = field(default_factory=list)
-    exits: List[Pos] = field(default_factory=list)
-    traps: List[Pos] = field(default_factory=list)
-    buttons: List[Pos] = field(default_factory=list)
-    switches: List[Pos] = field(default_factory=list)
-
-    #lcd : 添加player与monster的具体像素坐标
-    player_px : Optional[pxPos] = None
-    monsters_px : List[pxPos] = field(default_factory=list)
-
-    #lcd : 添加exits的信息
-    exit_infos: dict[str,Optional[ExitInfo]] = field(default_factory=dict) #记录东西南北4个门的类型，状态，是否存在（不存在为None）
-    # exit_types: Dict[Pos, str] = field(default_factory=dict)
-    # exit_opened: Dict[Pos, bool] = field(default_factory=dict)
-
-    @property
-    def exit_types(self) -> Dict[Pos, str]:
-        """动态构建 tile -> exit_type 的映射"""
-        result = {}
-        for info in self.exit_infos.values():
-            if info is not None:
-                for tile in info.tiles:
-                    result[tile] = info.exit_type
-        return result
-
-    @property
-    def exit_opened(self) -> Dict[Pos, bool]:
-        """动态构建 tile -> opened 的映射"""
-        result = {}
-        for info in self.exit_infos.values():
-            if info is not None:
-                for tile in info.tiles:
-                    result[tile] = info.opened
-        return result
-
+pxPos = Tuple[int, int]  # 像素坐标 (0~159, 0~127)
 
 def blank_tile():
     frame = np.zeros((TILE, TILE, 3), dtype=np.uint8)
@@ -320,6 +258,239 @@ class MonsterDetector:
         ]
 
 
+
+@dataclass
+class SymbolicObs:
+    grid: np.ndarray                    # shape: (8, 10)
+    player: Optional[Pos] = None
+    facing: str = "up"
+    monsters: List[Pos] = field(default_factory=list)
+    chests: List[Pos] = field(default_factory=list)
+    exits: List[Pos] = field(default_factory=list)
+
+    exit_infos: List['ExitInfo'] = field(default_factory=list)
+    traps: List[Pos] = field(default_factory=list)
+    buttons: List[Pos] = field(default_factory=list)
+    switches: List[Pos] = field(default_factory=list)
+
+    
+# class PixelPerception:
+#     def __init__(self):
+#         self.static_clf = StaticTileClassifier()
+#         self.player_detector = PlayerDetector()
+#         self.monster_detector = MonsterDetector()
+
+#     def __call__(self, obs):
+#         frame = np.asarray(obs)
+
+#         # 防止误传 render()，只取地图区域
+#         frame = frame[:128, :160, :3]
+
+#         grid = np.zeros((8, 10), dtype=np.int64)
+
+#         # 1. 静态 tile 分类
+#         for y in range(8):
+#             for x in range(10):
+#                 patch = frame[y*16:(y+1)*16, x*16:(x+1)*16, :]
+#                 label, name, score = self.static_clf.classify_tile(patch)
+
+#                 # 这里阈值可以设严格一点。
+#                 # 如果 score 太大，默认 floor，避免误判。
+#                 if score < 500:
+#                     grid[y, x] = label
+#                 else:
+#                     grid[y, x] = EMPTY
+
+#         # 2. 玩家覆盖修正
+#         player_info = self.player_detector.detect(frame)
+#         player = None
+#         facing = "down"
+
+#         if player_info is not None:
+#             player = player_info["tile"]
+#             facing = player_info["facing"]
+#             px, py = player
+#             grid[py, px] = PLAYER
+
+#         # 3. 怪物覆盖修正
+#         monsters = []
+#         for m in self.monster_detector.detect_all(frame):
+#             tx, ty = m["tile"]
+#             monsters.append((tx, ty))
+#             grid[ty, tx] = MONSTER
+
+#         return self.grid_to_symbolic(grid, player, facing, monsters)
+
+#     def grid_to_symbolic(self, grid, player, facing, monsters):
+#         chests = []
+#         traps = []
+#         buttons = []
+#         switches = []
+#         npcs = []
+#         gaps = []
+#         bridges = []
+#         exits = []
+
+#         for y in range(8):
+#             for x in range(10):
+#                 v = int(grid[y, x])
+
+#                 if v == CHEST:
+#                     chests.append((x, y))
+#                 elif v == TRAP:
+#                     traps.append((x, y))
+#                 elif v == BUTTON:
+#                     buttons.append((x, y))
+#                 elif v == SWITCH:
+#                     switches.append((x, y))
+#                 elif v == NPC:
+#                     npcs.append((x, y))
+#                 elif v == GAP:
+#                     gaps.append((x, y))
+#                 elif v == BRIDGE:
+#                     bridges.append((x, y))
+#                 elif v == EXIT:
+#                     exits.append((x, y))
+
+#         return SymbolicObs(
+#             grid=grid,
+#             player=player,
+#             facing=facing,
+#             monsters=monsters,
+#             chests=chests,
+#             exits=exits,
+#             traps=traps,
+#             buttons=buttons,
+#             switches=switches,
+#         )
+class PixelPerception:
+    def __init__(self):
+        self.static_clf = StaticTileClassifier()
+        self.player_detector = PlayerDetector()
+        self.monster_detector = MonsterDetector()
+        self.exit_detector = ExitDetector()
+
+    def __call__(self, obs):
+        frame = np.asarray(obs)
+
+        # 防止误传 render()，只取地图区域
+        frame = frame[:128, :160, :3]
+
+        grid = np.zeros((8, 10), dtype=np.int64)
+
+        # 1. 静态 tile 分类
+        for y in range(8):
+            for x in range(10):
+                patch = frame[y*16:(y+1)*16, x*16:(x+1)*16, :]
+                label, name, score = self.static_clf.classify_tile(patch)
+
+                # 这里阈值可以设严格一点。
+                # 如果 score 太大，默认 floor，避免误判。
+                if score < 500:
+                    grid[y, x] = label
+                else:
+                    grid[y, x] = EMPTY
+
+        # exit_infos = self.exit_detector.detect(frame)
+
+        # exits = []
+        # for e in exit_infos:
+        #     x, y = e["tile"]
+        #     type_ = e.get("exit_type", "unknown")
+        #     opened = e.get("opened", False)
+        #     exits.append((x, y, type_, opened))
+        #     grid[y, x] = EXIT
+
+        exit_infos_raw = self.exit_detector.detect(frame)
+
+        exits: List[Pos] = []
+        exit_infos: List[ExitInfo] = []
+
+        for e in exit_infos_raw:
+            tiles = e.get("tiles", [e["tile"]])
+            tiles = [(int(x), int(y)) for x, y in tiles]
+
+            info = ExitInfo(
+                tiles=tiles,
+                direction=e.get("direction", "unknown"),
+                exit_type=e.get("exit_type", "unknown"),
+                opened=bool(e.get("opened", False)),
+                score=float(e.get("score", 0.0)),
+            )
+            exit_infos.append(info)
+
+            for x, y in tiles:
+                if 0 <= x < ROOM_W and 0 <= y < ROOM_H:
+                    exits.append((x, y))
+                    grid[y, x] = EXIT
+
+        # 2. 玩家覆盖修正
+        player_info = self.player_detector.detect(frame)
+        player = None
+        facing = "down"
+
+        if player_info is not None:
+            player = player_info["tile"]
+            facing = player_info["facing"]
+            px, py = player
+            grid[py, px] = PLAYER
+
+        # 3. 怪物覆盖修正
+        monsters = []
+        for m in self.monster_detector.detect_all(frame):
+            tx, ty = m["tile"]
+            monsters.append((tx, ty))
+            grid[ty, tx] = MONSTER
+
+        return self.grid_to_symbolic(grid, player, facing, monsters, exits, exit_infos)
+
+    def grid_to_symbolic(self, grid, player, facing, monsters, exits_hint=None, exit_infos_hint=None):
+        chests = []
+        traps = []
+        buttons = []
+        switches = []
+        npcs = []
+        gaps = []
+        bridges = []
+        exits = list(exits_hint) if exits_hint is not None else []
+        exit_infos = list(exit_infos_hint) if exit_infos_hint is not None else []
+
+        for y in range(8):
+            for x in range(10):
+                v = int(grid[y, x])
+
+                if v == CHEST:
+                    chests.append((x, y))
+                elif v == TRAP:
+                    traps.append((x, y))
+                elif v == BUTTON:
+                    buttons.append((x, y))
+                elif v == SWITCH:
+                    switches.append((x, y))
+                elif v == NPC:
+                    npcs.append((x, y))
+                elif v == GAP:
+                    gaps.append((x, y))
+                elif v == BRIDGE:
+                    bridges.append((x, y))
+                elif v == EXIT:
+                    p = (x, y)
+                    if p not in exits:
+                        exits.append((x, y))
+
+        return SymbolicObs(
+            grid=grid,
+            player=player,
+            facing=facing,
+            monsters=monsters,
+            chests=chests,
+            exits=exits,
+            exit_infos=exit_infos,
+            traps=traps,
+            buttons=buttons,
+            switches=switches,
+        )
+
 # from nesylink.core.rendering import sprites as sp
 from nesylink.core.constants import (
     COLOR_EXIT_NORMAL,
@@ -330,26 +501,21 @@ from nesylink.core.constants import (
 def make_exit_patch(direction: str, exit_type: str, opened: bool = False):
     """
     生成和真实渲染一致的出口模板。
-    #lcd :重命名方向
     direction: north/south/west/east
     exit_type: normal/locked_key/conditional
     """
-    #使用mask
+
     if direction in {"west", "east"}:
         # 竖向门：1列×2行，大小 16×32
         patch = np.zeros((32, 16, 3), dtype=np.uint8)
-        mask = np.zeros((32, 16), dtype=bool)
-        mask[2:30,2:14] = True
-        # sp.draw_floor(patch, 0, 0)
-        # sp.draw_floor(patch, 0, 1)
+        sp.draw_floor(patch, 0, 0)
+        sp.draw_floor(patch, 0, 1)
         tiles = ((0, 0), (0, 1))
     else:
         # 横向门：2列×1行，大小 32×16
         patch = np.zeros((16, 32, 3), dtype=np.uint8)
-        mask = np.zeros((16, 32), dtype=bool)
-        mask[2:14,2:30] = True
-        # sp.draw_floor(patch, 0, 0)
-        # sp.draw_floor(patch, 1, 0)
+        sp.draw_floor(patch, 0, 0)
+        sp.draw_floor(patch, 1, 0)
         tiles = ((0, 0), (1, 0))
 
     if exit_type == "locked_key":
@@ -358,12 +524,23 @@ def make_exit_patch(direction: str, exit_type: str, opened: bool = False):
         color = COLOR_EXIT_CONDITIONAL
     else:
         color = COLOR_EXIT_NORMAL
+
     sp.draw_exit(patch, tiles, exit_type, color, opened=opened)
+    return patch
 
-    return patch,mask
+@dataclass
+class ExitInfo:
+    tiles: List[Pos]              # 这个出口占据的两个 tile
+    direction: str                # north/south/west/east
+    exit_type: str = "unknown"    # normal/locked_key/conditional/unknown
+    opened: bool = False
+    score: float = 0.0
+
+    @property
+    def representative(self) -> Pos:
+        return self.tiles[0]
 
 
-#识别exit
 class ExitDetector:
     def __init__(self):
         self.templates = []
@@ -371,13 +548,12 @@ class ExitDetector:
         for direction in ["north", "south", "west", "east"]:
             for exit_type in ["normal", "locked_key", "conditional"]:
                 for opened in [False, True]:
-                    patch,mask = make_exit_patch(direction, exit_type, opened)
+                    patch = make_exit_patch(direction, exit_type, opened)
                     self.templates.append({
                         "direction": direction,
                         "exit_type": exit_type,
                         "opened": opened,
                         "patch": patch,
-                        "mask":mask,
                     })
 
     def candidate_regions(self, frame):
@@ -388,7 +564,7 @@ class ExitDetector:
 
         cands = []
 
-        #north/south 门通常在中间两格附近，但为了泛化，沿边缘滑动 2-tile 窗口
+        # north/south 门通常在中间两格附近，但为了泛化，沿边缘滑动 2-tile 窗口
         for x in range(0, ROOM_W - 1):
             # north: y=0, 2列×1行
             patch = frame[0:16, x*16:(x+2)*16, :]
@@ -422,7 +598,7 @@ class ExitDetector:
                 if tmpl["patch"].shape != patch.shape:
                     continue
 
-                score = masked_mse(patch, tmpl["patch"],tmpl['mask'])
+                score = mse(patch, tmpl["patch"])
                 if best is None or score < best["score"]:
                     best = {
                         "score": score,
@@ -444,126 +620,19 @@ class ExitDetector:
                 best_by_direction[d] = item
 
         for item in best_by_direction.values():
+            item = dict(item)  # copy
+            item["tiles"] = self.exit_tiles_from_rep(item["direction"], item["tile"])
             exits.append(item)
 
         return exits
-
     
-class PixelPerception:
-    def __init__(self):
-        self.static_clf = StaticTileClassifier()
-        self.player_detector = PlayerDetector()
-        self.monster_detector = MonsterDetector()
-        self.exit_detector = ExitDetector()
+    def exit_tiles_from_rep(self, direction: str, tile: Pos) -> List[Pos]:
+        x, y = tile
 
-    def __call__(self, obs):
-        frame = np.asarray(obs)
+        if direction in {"north", "south"}:
+            return [(x, y), (x + 1, y)]
 
-        # 防止误传 render()，只取地图区域
-        frame = frame[:128, :160, :3]
+        if direction in {"west", "east"}:
+            return [(x, y), (x, y + 1)]
 
-        grid = np.zeros((8, 10), dtype=np.int64)
-
-        # 1. 静态 tile 分类
-        for y in range(8):
-            for x in range(10):
-                patch = frame[y*16:(y+1)*16, x*16:(x+1)*16, :]
-                label, name, score = self.static_clf.classify_tile(patch)
-
-                # 这里阈值可以设严格一点。
-                # 如果 score 太大，默认 floor，避免误判。
-                if score <= 500:
-                    grid[y, x] = label
-                else:
-                    grid[y, x] = EMPTY
-
-        exit_infos_list = self.exit_detector.detect(frame)
-
-        exits = []
-        dirs = ["north", "south", "west", "east"]
-        exit_infos : dict[str,Optional[ExitInfo]] = {"north":None, "south":None, "west":None, "east":None}
-        for e in exit_infos_list:
-            x, y = e["tile"]
-            dir = e['direction']
-            #
-            if exit_infos[dir] is None:
-                exit_infos[dir] = ExitInfo(tiles=[], direction=dir)
-                exit_infos[dir].opened = e['opened']
-                exit_infos[dir].exit_type = e['exit_type']
-
-            exit_infos[dir].tiles.append((x,y))
-
-            exits.append((x, y))
-            grid[y, x] = EXIT
-
-        # 2. 玩家覆盖修正
-        player_info = self.player_detector.detect(frame)
-        player = None
-        player_px = None
-        facing = "down"
-
-        if player_info is not None:
-            player = player_info["tile"]
-            facing = player_info["facing"]
-            player_px = player_info['position_px']
-            px, py = player
-            grid[py, px] = PLAYER
-
-        # 3. 怪物覆盖修正
-        monsters = []
-        monsters_px = []
-        for m in self.monster_detector.detect_all(frame):
-            tx, ty = m["tile"]
-            monsters.append((tx, ty))
-            monsters_px.append(m['position_px'])
-            grid[ty, tx] = MONSTER
-
-        return self.grid_to_symbolic(grid, player, facing, monsters,player_px,monsters_px,exits,exit_infos)
-
-    def grid_to_symbolic(self, grid, player, facing, monsters,player_px,monsters_px, exits_hint=None,exit_infos : dict[str,ExitInfo | None] = None):
-        chests = []
-        traps = []
-        buttons = []
-        switches = []
-        npcs = []
-        gaps = []
-        bridges = []
-        exits = list(exits_hint) if exits_hint is not None else []
-
-        for y in range(8):
-            for x in range(10):
-                v = int(grid[y, x])
-
-                if v == CHEST:
-                    chests.append((x, y))
-                elif v == TRAP:
-                    traps.append((x, y))
-                elif v == BUTTON:
-                    buttons.append((x, y))
-                elif v == SWITCH:
-                    switches.append((x, y))
-                elif v == NPC:
-                    npcs.append((x, y))
-                elif v == GAP:
-                    gaps.append((x, y))
-                elif v == BRIDGE:
-                    bridges.append((x, y))
-                elif v == EXIT:
-                    p = (x, y)
-                    if p not in exits:
-                        exits.append((x, y))
-
-        return SymbolicObs(
-            grid=grid,
-            player=player,
-            facing=facing,
-            monsters=monsters,
-            chests=chests,
-            exits=exits,
-            traps=traps,
-            buttons=buttons,
-            switches=switches,
-            player_px=player_px,
-            monsters_px=monsters_px,
-            exit_infos=exit_infos,
-        )
+        return [tile]
